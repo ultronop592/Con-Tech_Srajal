@@ -14,7 +14,7 @@
 
 Renters sign contracts full of legalese they don't understand. Legal jargon in rental agreements creates an unequal power dynamic — landlords know what clauses mean, tenants often don't.
 
-**NyayaAI** solves this by fine-tuning Gemma 270M to translate dense legal clauses into one-sentence plain English summaries — instantly, locally, for free.
+**UnLegalize** solves this by fine-tuning Gemma 270M to translate dense legal clauses into one-sentence plain English summaries — instantly, locally, for free.
 
 ---
 
