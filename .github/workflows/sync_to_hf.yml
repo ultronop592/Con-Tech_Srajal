@@ -3,6 +3,7 @@ name: Sync Backend to Hugging Face Spaces
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   sync-to-hf:
@@ -13,11 +14,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Push Backend to HF Space
+      - name: Deploy Backend to HF Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git subtree split --prefix=backend -b hf-deploy
-          git push --force https://srajalt76:${HF_TOKEN}@huggingface.co/spaces/srajalt76/UnLegalize-Backend hf-deploy:main
+          cd backend
+          git init
+          git config user.name "srajalt76"
+          git config user.email "srajalt76@gmail.com"
+          git add .
+          git commit -m "Deploy updated backend from GitHub Action"
+          git push --force https://srajalt76:${HF_TOKEN}@huggingface.co/spaces/srajalt76/UnLegalize-Backend HEAD:main
