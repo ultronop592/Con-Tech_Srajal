@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import re
 from functools import lru_cache
@@ -7,6 +8,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from app.config import get_settings
+from app.services.grounding_verifier import verify_and_clean_grounding
 
 try:
     from peft import PeftModel
@@ -21,6 +23,11 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Path to fine-tuned LoRA adapter (relative to backend/)
 ADAPTER_DIR = Path(__file__).resolve().parents[2] / "outputs" / "gemma-3-270m-rental-lora"
+
+# SHA256 clause simplification cache to eliminate duplicate inference passes
+CLAUSE_CACHE: dict[str, str] = {}
+
+NEGATION_WORDS = {"not", "no", "never", "without", "neither", "nor"}
 
 
 HIGH_RISK = {
@@ -62,6 +69,16 @@ def _extract_key_points(text: str, max_points: int = 5) -> list[str]:
     return points[:max_points]
 
 
+def _is_negated(phrase: str, text_lowered: str) -> bool:
+    """Checks if a risk phrase is preceded by a negation word within 4 words."""
+    idx = text_lowered.find(phrase)
+    if idx == -1:
+        return False
+    preceding_text = text_lowered[max(0, idx - 40):idx]
+    words = preceding_text.split()[-4:]
+    return any(w in NEGATION_WORDS for w in words)
+
+
 def _score_risk(clause: str) -> dict:
     lowered = clause.lower()
     reasons: list[str] = []
@@ -70,12 +87,16 @@ def _score_risk(clause: str) -> dict:
 
     for phrase, reason in HIGH_RISK.items():
         if phrase in lowered:
+            if _is_negated(phrase, lowered):
+                continue
             score += 20
             flags.append(phrase)
             reasons.append(reason)
 
     for phrase, reason in MEDIUM_RISK.items():
         if phrase in lowered:
+            if _is_negated(phrase, lowered):
+                continue
             score += 10
             flags.append(phrase)
             reasons.append(reason)
@@ -150,25 +171,38 @@ def print_model_runtime_info() -> None:
         logger.warning("Model: %s | Device: %s | Error: %s", model_id, device, exc)
 
 
+def _get_clause_hash(clause: str) -> str:
+    return hashlib.sha256(clause.strip().encode("utf-8")).hexdigest()
+
+
 def _generate_plain_english(clause: str) -> str:
-    """Generate a plain-English simplification of a legal clause using Gemma 3."""
+    """Generate a plain-English simplification of a legal clause using Gemma 3 with Anti-Hallucination rules."""
+    clause_clean = clause.strip()
+    if not clause_clean:
+        return ""
+
+    # Check cache first
+    clause_hash = _get_clause_hash(clause_clean)
+    if clause_hash in CLAUSE_CACHE:
+        logger.info("Clause cache hit for hash: %s...", clause_hash[:8])
+        return CLAUSE_CACHE[clause_hash]
+
     system_prompt = (
-        "You are a legal language simplifier for Indian rental agreements. "
+        "You are a factual legal language simplifier for Indian rental agreements. "
         "Convert the given legal clause into plain, simple English that any tenant can understand. "
         "Rules:\n"
         "- Use 1-2 short sentences maximum\n"
         "- Start with: You must / You cannot / Your landlord can / This means\n"
         "- No legal jargon\n"
-        "- Be specific about what the tenant needs to know\n"
-        "- If it mentions money, mention the amount or condition"
+        "- CRITICAL: Translate ONLY what is explicitly in the text. DO NOT invent or insert any rupee amounts, dates, or penalties not present in the original clause.\n"
+        "- If it mentions money, state the exact amount mentioned or condition."
     )
 
     try:
         tokenizer, model = get_model_bundle()
 
-        # Use Gemma 3 chat template via tokenizer
         messages = [
-            {"role": "user", "content": f"{system_prompt}\n\nSimplify this clause:\n{clause}"},
+            {"role": "user", "content": f"{system_prompt}\n\nSimplify this clause:\n{clause_clean}"},
         ]
 
         prompt = tokenizer.apply_chat_template(
@@ -182,22 +216,29 @@ def _generate_plain_english(clause: str) -> str:
             generated = model.generate(
                 **inputs,
                 max_new_tokens=80,
-                temperature=0.3,
-                repetition_penalty=1.2,
-                do_sample=True,
+                do_sample=False,  # Deterministic greedy decoding to reduce hallucinations
+                repetition_penalty=1.15,
             )
 
-        # Decode only the new tokens (skip the input prompt)
         new_tokens = generated[0][inputs["input_ids"].shape[1]:]
         result = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
-        # Clean up: take up to 2 sentences
         sentences = re.split(r"(?<=[.!?])\s+", result)
         cleaned = ". ".join(s.strip() for s in sentences[:2] if s.strip())
         if cleaned and not cleaned.endswith("."):
             cleaned += "."
 
-        return cleaned if cleaned and len(cleaned) > 10 else _fallback_simplify(clause)
+        # Anti-Hallucination Grounding Shield Check
+        if cleaned and len(cleaned) > 10:
+            cleaned, modified = verify_and_clean_grounding(clause_clean, cleaned)
+            if modified:
+                logger.info("Grounding verifier adjusted potential hallucination in model output.")
+        else:
+            cleaned = _fallback_simplify(clause_clean)
+
+        # Store in cache
+        CLAUSE_CACHE[clause_hash] = cleaned
+        return cleaned
 
     except Exception as exc:
         logger.error("LLM inference failed: %s", exc, exc_info=True)

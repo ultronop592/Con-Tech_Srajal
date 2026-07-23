@@ -5,7 +5,9 @@ def split_into_clauses(text: str, max_clause_chars: int = 600) -> list[str]:
     if not text:
         return []
 
-    split_pattern = r"\n(?=(?:\d+\.|clause\s+\d+|section\s+\d+|[A-Z]\.|-\s))"
+    # Enhanced regex to capture digits (1., 1.1), clause/section/article headers,
+    # Roman numerals (I., II., III.), lettered lists (A., a.), and numbered parentheses ((1), (a))
+    split_pattern = r"\n(?=(?:\d+(?:\.\d+)*\.|clause\s+\d+|section\s+\d+|article\s+\d+|paragraph\s+\d+|(?:M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3}))\.|[A-Z]\.|\([0-9a-z]\)|-\s))"
     chunks = [
         chunk.strip()
         for chunk in re.split(split_pattern, text, flags=re.IGNORECASE)
