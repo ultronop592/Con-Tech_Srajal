@@ -11,17 +11,17 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
 
-      - name: Deploy Backend to HF Space
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install huggingface_hub
+        run: pip install huggingface_hub
+
+      - name: Upload Backend to HF Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          cd backend
-          git init
-          git config user.name "srajalt76"
-          git config user.email "srajalt76@gmail.com"
-          git add .
-          git commit -m "Deploy updated backend from GitHub Action"
-          git push --force https://srajalt76:${HF_TOKEN}@huggingface.co/spaces/srajalt76/UnLegalize-Backend HEAD:main
+          python -c "from huggingface_hub import HfApi; import os; api = HfApi(token=os.environ['HF_TOKEN']); api.upload_folder(folder_path='backend', repo_id='srajalt76/UnLegalize-Backend', repo_type='space')"
